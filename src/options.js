@@ -1,0 +1,181 @@
+// options.js - manage multi-regex (AND) redirect rules
+
+const tbody = document.getElementById('rulesBody');
+const statusEl = document.getElementById('status');
+
+function createRow(rule = { enabled: true, patterns: [''], destination: '' }) {
+  if (!Array.isArray(rule.patterns) || !rule.patterns.length) rule.patterns = [''];
+  const tr = document.createElement('tr');
+  if (rule.enabled === false) tr.classList.add('disabled');
+  tr.innerHTML = `
+    <td><input type="checkbox" class="enabled" ${rule.enabled !== false ? 'checked' : ''}></td>
+    <td class="patterns-cell">
+      <div class="patterns-list"></div>
+      <div class="pattern-input-row">
+        <input type="text" class="pattern-input regex" placeholder="Add regex and press Enter" />
+        <button class="add-pattern" type="button">Add</button>
+      </div>
+    </td>
+    <td><input type="text" class="destination" placeholder="https://new.example.com/$1" value="${rule.destination || ''}"></td>
+    <td class="row-actions">
+      <button class="remove" type="button">Delete</button>
+    </td>
+  `;
+  tbody.appendChild(tr);
+  const listEl = tr.querySelector('.patterns-list');
+  function renderPatterns() {
+    listEl.innerHTML = '';
+    rule.patterns.forEach((p, idx) => {
+      const chip = document.createElement('span');
+      chip.className = 'pattern-chip';
+      chip.textContent = p;
+      chip.setAttribute('draggable','true');
+      chip.dataset.index = idx;
+      const del = document.createElement('button');
+      del.textContent = '×';
+      del.title = 'Remove pattern';
+      del.className = 'chip-del';
+      del.addEventListener('click', e => { e.stopPropagation(); rule.patterns.splice(idx,1); renderPatterns(); });
+      chip.appendChild(del);
+      chip.addEventListener('dragstart', e => {
+        chip.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', idx.toString());
+      });
+      chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+      listEl.appendChild(chip);
+    });
+  }
+  renderPatterns();
+  // Drag over patterns list to reorder
+  listEl.addEventListener('dragover', e => {
+    e.preventDefault();
+    const after = Array.from(listEl.querySelectorAll('.pattern-chip:not(.dragging)'))
+      .find(el => {
+        const box = el.getBoundingClientRect();
+        return e.clientX < box.left + box.width / 2; // insert before midpoint
+      });
+    const dragging = listEl.querySelector('.pattern-chip.dragging');
+    if (!dragging) return;
+    if (after) listEl.insertBefore(dragging, after); else listEl.appendChild(dragging);
+  });
+  listEl.addEventListener('drop', () => {
+    // Recompute rule.patterns from DOM order
+    rule.patterns = Array.from(listEl.querySelectorAll('.pattern-chip')).map(c => c.firstChild.textContent);
+    renderPatterns();
+  });
+  const input = tr.querySelector('.pattern-input');
+  function addPattern() {
+    const val = input.value.trim();
+    if (val) { rule.patterns.push(val); input.value=''; renderPatterns(); }
+  }
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addPattern(); } });
+  tr.querySelector('.add-pattern').addEventListener('click', addPattern);
+  const enabledBox = tr.querySelector('.enabled');
+  enabledBox.addEventListener('change', () => {
+    tr.classList.toggle('disabled', !enabledBox.checked);
+  });
+  tr.querySelector('.remove').addEventListener('click', () => tr.remove());
+  // Enable row drag for reordering rules
+  tr.setAttribute('draggable','true');
+  tr.addEventListener('dragstart', e => {
+    tr.classList.add('dragging');
+    e.dataTransfer.setData('text/plain','row');
+  });
+  tr.addEventListener('dragend', () => tr.classList.remove('dragging'));
+  tr._getRule = () => ({
+    enabled: enabledBox.checked,
+    patterns: rule.patterns.filter(p => p.trim()),
+    destination: tr.querySelector('.destination').value.trim()
+  });
+}
+
+function readRules() {
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  return rows.map(tr => tr._getRule && tr._getRule())
+    .filter(r => r && r.patterns.length && r.destination);
+}
+
+function showStatus(msg, ok = true) {
+  statusEl.textContent = msg;
+  statusEl.style.color = ok ? 'green' : 'crimson';
+  if (msg) setTimeout(() => { statusEl.textContent = ''; }, 3000);
+}
+
+async function load() {
+  chrome.storage.sync.get(['rules'], data => {
+    const rules = Array.isArray(data.rules) ? data.rules : [];
+    tbody.innerHTML = '';
+    rules.forEach(r => {
+      if (r.pattern && !r.patterns) r.patterns = [r.pattern];
+      createRow(r);
+    });
+    if (!rules.length) createRow();
+  });
+}
+
+async function save() {
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  let hasError = false;
+  const rules = [];
+  rows.forEach(tr => {
+    if (!tr._getRule) return;
+    const rule = tr._getRule();
+    const destInput = tr.querySelector('.destination');
+    destInput.classList.remove('invalid');
+    // Validate destination URL
+    let urlOk = true;
+    try {
+      if (!/^https?:\/\//i.test(rule.destination)) urlOk = false;
+      else new URL(rule.destination);
+    } catch { urlOk = false; }
+    if (!urlOk) {
+      destInput.classList.add('invalid');
+      hasError = true;
+      return; // skip storing invalid rule
+    }
+    // Validate capture refs ($1 etc) against last pattern group count
+    const lastPattern = rule.patterns[rule.patterns.length - 1];
+    let groupCount = 0;
+    try {
+      const dummy = new RegExp(lastPattern);
+      // Estimate group count: count '(' not followed by '?' (naive but ok)
+      groupCount = (lastPattern.match(/\((?!\?)/g) || []).length;
+    } catch { /* ignore */ }
+    const refs = rule.destination.match(/\$(\d+)/g) || [];
+    for (const ref of refs) {
+      const num = Number(ref.slice(1));
+      if (!(num >=0 && num <= groupCount)) {
+        destInput.classList.add('invalid');
+        hasError = true;
+        break;
+      }
+    }
+    if (!hasError && rule.patterns.length && rule.destination) rules.push(rule);
+  });
+  if (hasError) {
+    showStatus('Validation error: fix highlighted destinations', false);
+    return;
+  }
+  await new Promise(res => chrome.storage.sync.set({ rules }, res));
+  chrome.runtime.sendMessage({ type: 'SYNC_RULES' }, resp => {
+    if (resp?.ok) showStatus('Saved & synced');
+    else showStatus('Save error: ' + resp?.error, false);
+  });
+}
+
+document.getElementById('addRow').addEventListener('click', () => createRow());
+document.getElementById('save').addEventListener('click', save);
+
+// Table-level drag to reorder rule rows
+tbody.addEventListener('dragover', e => {
+  const dragging = tbody.querySelector('tr.dragging');
+  if (!dragging) return;
+  e.preventDefault();
+  const after = Array.from(tbody.querySelectorAll('tr:not(.dragging)'))
+    .find(row => e.clientY < row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2);
+  if (after) tbody.insertBefore(dragging, after); else tbody.appendChild(dragging);
+});
+// Re-save order implicitly on manual save; order in DOM defines order
+
+load();

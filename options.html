@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>GCloud Router Options</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 900px; }
+    h1 { font-size: 1.4rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: .5rem; }
+    th, td { border: 1px solid #ccc; padding: .4rem .5rem; font-size: .85rem; }
+    th { background: #f5f5f5; text-align: left; }
+    input[type=text] { width: 100%; }
+  tbody tr.disabled { opacity: .5; }
+  .patterns-list { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom:.25rem; }
+  .pattern-chip { background:#eef; border:1px solid #aac; padding:.15rem .4rem; border-radius: 12px; font-size:.7rem; position:relative; display:inline-flex; align-items:center; gap:.25rem; }
+  .pattern-chip .chip-del { background:none; border:none; cursor:pointer; font-size:.8rem; line-height:1; padding:0; }
+  .pattern-input-row { display:flex; gap:.3rem; }
+  .pattern-input-row input { flex:1; }
+  input.invalid { border-color: crimson; background:#ffecec; }
+  #status.error { color: crimson; }
+  tr.dragging { opacity: .4; }
+  .pattern-chip { cursor: move; }
+  .pattern-chip.dragging { opacity: .5; }
+    button { cursor: pointer; }
+    .row-actions button { margin-right: .4rem; }
+    #addRow { margin-top: .75rem; }
+    #status { margin-top: .75rem; font-size: .8rem; }
+    .regex { font-family: "SFMono-Regular", Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <h1>GCloud Router Rules</h1>
+  <p>Provide regex patterns to match navigation URLs (all must pass). Prefix a pattern with <code>!</code> to negate it. Destination may reference capture groups from the last positive pattern.</p>
+  <table id="rulesTable">
+    <thead>
+      <tr><th>Enabled</th><th>Regex Pattern</th><th>Destination URL</th><th class="row-actions">Actions</th></tr>
+    </thead>
+    <tbody id="rulesBody"></tbody>
+  </table>
+  <button id="addRow">Add Rule</button>
+  <button id="save">Save</button>
+  <div id="status"></div>
+
+  <script type="module" src="src/options.js"></script>
+</body>
+</html>
