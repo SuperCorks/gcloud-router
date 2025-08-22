@@ -2,6 +2,7 @@
 // Each rule: { enabled: bool, patterns: string[] (all must match), destination: string }
 
 let cachedRules = [];
+let loadingPromise = null; // track in-flight refresh to prevent duplicate loads
 
 async function loadRules() {
   return new Promise(resolve => {
@@ -55,6 +56,17 @@ async function refreshCache() {
   console.log('Router: cached rules', cachedRules.length);
 }
 
+// Eagerly load rules every time the service worker spins up (cold start or after suspension)
+loadingPromise = refreshCache().catch(e => console.warn('Initial rule load failed', e));
+
+async function ensureRulesLoaded() {
+  // If cache empty (e.g., very first event before async load completes or unexpected failure), wait for current or start new load
+  if (cachedRules.length === 0) {
+    if (!loadingPromise) loadingPromise = refreshCache().finally(() => { loadingPromise = null; });
+    try { await loadingPromise; } catch { /* already logged */ }
+  }
+}
+
 chrome.runtime.onInstalled.addListener(refreshCache);
 chrome.runtime.onStartup?.addListener(refreshCache);
 
@@ -65,6 +77,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Listen for committed navigation then decide redirect early if possible
 chrome.webNavigation.onBeforeNavigate.addListener(async details => {
   if (details.frameId !== 0) return; // only main frame
+  await ensureRulesLoaded();
   const url = details.url;
   for (const rule of cachedRules) {
     // Compute individual results for debug (handle negation)
