@@ -31,12 +31,35 @@ function createRow(rule = { enabled: true, patterns: [''], destination: '' }) {
       chip.textContent = p;
       chip.setAttribute('draggable','true');
       chip.dataset.index = idx;
+      // store the original pattern explicitly (safer than relying on textContent)
+      chip.dataset.pattern = p;
       const del = document.createElement('button');
-      del.textContent = '×';
+      del.textContent = '\u00d7';
       del.title = 'Remove pattern';
       del.className = 'chip-del';
       del.addEventListener('click', e => { e.stopPropagation(); rule.patterns.splice(idx,1); renderPatterns(); });
+      // Prevent double-click on the delete button from bubbling to the chip (which would copy)
+      del.addEventListener('dblclick', e => e.stopPropagation());
       chip.appendChild(del);
+      // Double-click the chip to copy its pattern to clipboard
+      chip.addEventListener('dblclick', async e => {
+        e.stopPropagation();
+        // don't copy if the dblclick originated on the delete button
+        if (e.target && e.target.classList && e.target.classList.contains('chip-del')) return;
+        const text = chip.dataset.pattern || p;
+        try {
+          await navigator.clipboard.writeText(text);
+          showStatus('Pattern copied to clipboard');
+        } catch (err) {
+          // Fallback copy method for older contexts
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); showStatus('Pattern copied to clipboard'); } catch { showStatus('Copy failed', false); }
+          ta.remove();
+        }
+      });
       chip.addEventListener('dragstart', e => {
         chip.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
@@ -60,8 +83,8 @@ function createRow(rule = { enabled: true, patterns: [''], destination: '' }) {
     if (after) listEl.insertBefore(dragging, after); else listEl.appendChild(dragging);
   });
   listEl.addEventListener('drop', () => {
-    // Recompute rule.patterns from DOM order
-    rule.patterns = Array.from(listEl.querySelectorAll('.pattern-chip')).map(c => c.firstChild.textContent);
+    // Recompute rule.patterns from DOM order (use dataset.pattern to avoid DOM text nuances)
+    rule.patterns = Array.from(listEl.querySelectorAll('.pattern-chip')).map(c => c.dataset.pattern || c.textContent || '');
     renderPatterns();
   });
   const input = tr.querySelector('.pattern-input');
