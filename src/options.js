@@ -200,8 +200,10 @@ function setHostStatus(msg, ok) {
 function checkProfileRouterHost() {
   if (!slackBox.checked) return setHostStatus('', true);
   chrome.runtime.sendNativeMessage('com.supercorks.profilerouter', { url: 'about:blank' }, () => {
-    if (chrome.runtime.lastError) {
-      setHostStatus('ProfileRouter isn\'t reachable (' + chrome.runtime.lastError.message + '). Run scripts/install.sh in profile-router. Until then, Slack links open on the web.', false);
+    const error = chrome.runtime.lastError; // read it even when the answer is no longer wanted
+    if (!slackBox.checked) return; // turned off while the check was running
+    if (error) {
+      setHostStatus('ProfileRouter isn\'t reachable (' + error.message + '). Run scripts/install.sh in profile-router. Until then, Slack links open on the web.', false);
     } else {
       setHostStatus('Uses ProfileRouter on this Mac. Links it can\'t open in Slack load on the web as usual.', true);
     }

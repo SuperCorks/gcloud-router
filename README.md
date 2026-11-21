@@ -18,7 +18,8 @@ Rules you define are stored and evaluated in the background service worker on `w
 ## Slack links in the Slack app
 `slack://` links need the workspace's team ID, which only the Slack app knows. [ProfileRouter](https://github.com/SuperCorks/profile-router) already reads it, so the extension asks ProfileRouter through Chrome native messaging (host `com.supercorks.profilerouter`) before a `slack.com` link loads:
 - ProfileRouter opens the link in Slack and replies `{ "handled": true }`. A tab opened for the link closes. When the link was clicked in an existing tab, the tab goes back to the page it was on.
-- Links ProfileRouter can't convert (slack.com pages, workspaces the app isn't signed in to) load normally, then the regex rules run as usual.
+- Links ProfileRouter can't convert (slack.com pages, workspaces the app isn't signed in to) load normally, then the regex rules run as usual. So do reloads and navigation inside Slack's web client, and links you choose to open in Chrome from ProfileRouter's picker or "Reopen in…".
+- Slack links wrapped by Google, Outlook safelinks, or slack-redir.net are recognized too.
 - Without ProfileRouter, every link loads normally. The Options page shows whether the host is reachable.
 
 Setup: run `scripts/install.sh` in profile-router. It installs the host and allows this extension's ID (`jhjbhohojgallohcifkfjeojmakiecdl`, the ID Chrome gives the unpacked extension at `~/gcloud-router`). For a different ID, set `PROFILE_ROUTER_EXTENSION_IDS` when running it. Keep the extension unpacked from the same folder: the ID comes from its path, and the saved rules belong to that ID.
@@ -46,6 +47,9 @@ Destination: `https://staging.example.com/app/$1`
 - Service worker logs appear in: chrome://extensions -> Inspect views (Service Worker).
 - Background maintains an in-memory compiled regex cache refreshed on install/startup and whenever rules change.
 - Destination substitution currently uses captures from the last regex only (simpler + predictable). Future enhancement could allow referencing pattern index.
+
+## Tests
+`npm test` runs the Slack handoff's event-ordering tests (`node --test`, no dependencies).
 
 ## Roadmap / Ideas
 - Export / import rules (JSON download & upload)
