@@ -20,6 +20,7 @@ Rules you define are stored and evaluated in the background service worker on `w
 - ProfileRouter opens the link in Slack and replies `{ "handled": true }`. A tab opened for the link closes. When the link was clicked in an existing tab, the tab goes back to the page it was on.
 - Links ProfileRouter can't convert (slack.com pages, workspaces the app isn't signed in to) load normally, then the regex rules run as usual. So do reloads and navigation inside Slack's web client, and links you choose to open in Chrome from ProfileRouter's picker or "Reopen in…".
 - Slack links wrapped by Google, Outlook safelinks, or slack-redir.net are recognized too.
+- Known limits: going Back or Forward onto a Slack page, or restoring or duplicating a Slack tab, can still bring the Slack app forward, because Chrome only reports how a navigation happened once its page commits. Tabs that go Back or Forward stay where they are; a restored or duplicated Slack tab counts as a new tab and closes.
 - Without ProfileRouter, every link loads normally. The Options page shows whether the host is reachable.
 
 Setup: run `scripts/install.sh` in profile-router. It installs the host and allows this extension's ID (`jhjbhohojgallohcifkfjeojmakiecdl`, the ID Chrome gives the unpacked extension at `~/gcloud-router`). For a different ID, set `PROFILE_ROUTER_EXTENSION_IDS` when running it. Keep the extension unpacked from the same folder: the ID comes from its path, and the saved rules belong to that ID.

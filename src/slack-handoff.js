@@ -24,7 +24,7 @@ const HOP_MS = 2000;
 function wrappedTarget(u) {
   const host = u.hostname.toLowerCase();
   if ((host === 'google.com' || host.endsWith('.google.com')) && u.pathname === '/url') {
-    return u.searchParams.get('q') || (u.searchParams.has('q') ? null : u.searchParams.get('url'));
+    return u.searchParams.get('q') || u.searchParams.get('url'); // a non-empty `q` wins, as in URLUnwrapper
   }
   if (host.endsWith('safelinks.protection.outlook.com') || host === 'slack-redir.net') {
     return u.searchParams.get('url');
@@ -62,7 +62,7 @@ function isActiveMainFrame(details) {
  * @param {() => number} [deps.now]
  */
 export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now }) {
-  const records = new Map(); // tabId -> { phase, url, fresh, committed, started, expires }
+  const records = new Map(); // tabId -> { phase, url, fresh, committedAt, expires }
   const newTabs = new Set(); // tabs that haven't committed a real page yet
 
   function current(tabId) {
@@ -116,17 +116,17 @@ export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now })
       // The same link again (a double click), or the committed Slack page redirecting itself:
       // part of this handoff, so leave once this navigation commits. Any other Slack link gets its
       // own decision.
-      const hop = rec.committed && now() - rec.started < HOP_MS;
+      const hop = rec.committedAt !== null && now() - rec.committedAt < HOP_MS;
       if (url === rec.url || hop) {
         rec.url = url;
-        rec.committed = false;
+        rec.committedAt = null;
         rec.expires = now() + RECORD_TTL_MS;
         return true;
       }
       records.delete(tabId);
     }
 
-    const mine = { phase: 'asking', url, fresh: newTabs.has(tabId), committed: false, started: now(), expires: now() + RECORD_TTL_MS };
+    const mine = { phase: 'asking', url, fresh: newTabs.has(tabId), committedAt: null, expires: now() + RECORD_TTL_MS };
     records.set(tabId, mine);
     const [, tab] = await Promise.all([ready(), chrome.tabs.get(tabId).catch(() => null)]);
     // Expired, or replaced by another navigation: whatever happens next isn't this handoff's call.
@@ -134,7 +134,7 @@ export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now })
     if (!stillMine()) return true;
 
     // Slack's own web client (navigating within it) stays in Chrome.
-    const onSlackAlready = !mine.fresh && !mine.committed && isSlackURL(tab?.url);
+    const onSlackAlready = !mine.fresh && mine.committedAt === null && isSlackURL(tab?.url);
     if (!isEnabled() || !tab || onSlackAlready) {
       records.delete(tabId);
       return false;
@@ -154,7 +154,7 @@ export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now })
     if (mine.fresh || isBlankURL(tab.url)) {
       records.delete(tabId);
       await closeTab(tabId);
-    } else if (mine.committed) {
+    } else if (mine.committedAt !== null) {
       await leave(tabId);
     } else {
       mine.phase = 'leaving';
@@ -172,7 +172,7 @@ export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now })
       records.delete(tabId); // a Slack page you came back to or reloaded stays
       return;
     }
-    rec.committed = true;
+    rec.committedAt = now();
     if (rec.phase === 'leaving') leave(tabId);
   }
 

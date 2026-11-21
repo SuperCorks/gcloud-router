@@ -53,8 +53,9 @@ test('recognizes Slack links, including wrapped ones', () => {
   assert.ok(!isSlackURL('https://notslack.com/x'));
   assert.ok(!isSlackURL('https://www.google.com/url?q=https://github.com'));
   assert.ok(!isSlackURL('slack://channel?team=T1'));
-  // Google's `q` wins; `url` only counts without a `q`, as in ProfileRouter's unwrapper.
+  // A non-empty `q` wins and an empty one falls back to `url`, as in ProfileRouter's unwrapper.
   assert.ok(!isSlackURL('https://www.google.com/url?q=https://github.com&url=' + encodeURIComponent(PERMALINK)));
+  assert.ok(isSlackURL('https://www.google.com/url?sa=t&q=&esrc=s&url=' + encodeURIComponent(PERMALINK)));
 });
 
 test('a tab opened for the link closes', async () => {
@@ -261,5 +262,32 @@ test('a reply after the record expired does nothing', async () => {
   await t.reply(HANDLED);
   assert.equal(await done, true);
   assert.deepEqual(t.calls.back, []);
+});
+
+test('a redirect well after the Slack page committed is a new navigation', async () => {
+  let clock = 0;
+  const t = setup({ tabs: { 7: { id: 7, url: 'https://linear.app/issue/1' } }, now: () => clock });
+  const done = t.nav(7, PERMALINK);
+  await t.settle();
+  clock = 2500; // Slack took a while to commit; the window counts from the commit
+  t.commit(7, PERMALINK);
+  clock = 2600;
+  assert.equal(await t.nav(7, 'https://app.slack.com/client/T1/C024BE91L'), true); // joined
+  clock = 6000;
+  t.commit(7, 'https://app.slack.com/client/T1/C024BE91L');
+  await t.reply(HANDLED);
+  await done;
+  assert.equal(t.calls.host.length, 1);
+  assert.deepEqual(t.calls.back, [7]);
+});
+
+test('Back onto a Slack page after the host was asked keeps the tab', async () => {
+  const t = setup({ tabs: { 7: { id: 7, url: 'https://linear.app/issue/1' } } });
+  const done = t.nav(7, PERMALINK);
+  await t.settle(); // the host is already asked; Chrome can only tell us at commit
+  t.commit(7, PERMALINK, { transitionType: 'link', transitionQualifiers: ['forward_back'] });
+  await t.reply(HANDLED);
+  assert.equal(await done, true);
+  assert.deepEqual([...t.calls.back, ...t.calls.removed], []);
 });
 

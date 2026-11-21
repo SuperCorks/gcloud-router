@@ -60,14 +60,16 @@ async function refreshCache() {
   console.log('Router: cached rules', cachedRules.length, 'slack handoff', slackHandoff);
 }
 
-const slack = createSlackHandoff({ chrome, isEnabled: () => slackHandoff, ready: ensureRulesLoaded });
+// Off until settings have loaded once, so a failed read never overrides a saved "off".
+const slack = createSlackHandoff({ chrome, isEnabled: () => loaded && slackHandoff, ready: ensureRulesLoaded });
 slack.register();
 
 function startLoad() {
-  loadingPromise = refreshCache()
+  const load = refreshCache()
     .catch(e => console.warn('Rule load failed', e))
-    .finally(() => { loadingPromise = null; });
-  return loadingPromise;
+    .finally(() => { if (loadingPromise === load) loadingPromise = null; });
+  loadingPromise = load;
+  return load;
 }
 
 // Eagerly load rules every time the service worker spins up (cold start or after suspension)
