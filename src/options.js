@@ -187,6 +187,38 @@ async function save() {
   });
 }
 
+// --- Slack links -> Slack app (handled in background.js through ProfileRouter) ---
+const slackBox = document.getElementById('slackHandoff');
+const hostStatusEl = document.getElementById('slackHostStatus');
+
+function setHostStatus(msg, ok) {
+  hostStatusEl.textContent = msg;
+  hostStatusEl.classList.toggle('error', !ok);
+}
+
+// A non-web URL gets { handled: false } without opening anything, so it's a safe connection check.
+function checkProfileRouterHost() {
+  if (!slackBox.checked) return setHostStatus('', true);
+  chrome.runtime.sendNativeMessage('com.supercorks.profilerouter', { url: 'about:blank' }, () => {
+    if (chrome.runtime.lastError) {
+      setHostStatus('ProfileRouter isn\'t reachable (' + chrome.runtime.lastError.message + '). Run scripts/install.sh in profile-router. Until then, Slack links open on the web.', false);
+    } else {
+      setHostStatus('Uses ProfileRouter on this Mac. Links it can\'t open in Slack load on the web as usual.', true);
+    }
+  });
+}
+
+chrome.storage.sync.get('slackHandoff', ({ slackHandoff }) => {
+  slackBox.checked = slackHandoff !== false;
+  checkProfileRouterHost();
+});
+slackBox.addEventListener('change', () => {
+  chrome.storage.sync.set({ slackHandoff: slackBox.checked }, () => {
+    showStatus(slackBox.checked ? 'Slack links will open in the Slack app' : 'Slack links will open on the web');
+    checkProfileRouterHost();
+  });
+});
+
 document.getElementById('addRow').addEventListener('click', () => createRow());
 document.getElementById('save').addEventListener('click', save);
 

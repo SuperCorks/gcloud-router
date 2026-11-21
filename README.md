@@ -1,6 +1,6 @@
 # GCloud Router Chrome Extension
 
-Redirect browser navigations that match user-defined sets of regex patterns (ALL must match) to alternate destinations. Useful for internal environment routing (e.g., prod -> staging), vanity URL rewrites, etc.
+Redirect browser navigations that match user-defined sets of regex patterns (ALL must match) to alternate destinations. Useful for internal environment routing (e.g., prod -> staging), vanity URL rewrites, etc. It can also open Slack links in the Slack app instead of on slack.com.
 
 ## Features
 - Multiple regex patterns per rule (logical AND)
@@ -10,9 +10,18 @@ Redirect browser navigations that match user-defined sets of regex patterns (ALL
 - Enable/disable individual rules
 - Persist rules with `chrome.storage.sync`
 - Lightweight service-worker evaluation (no DNR dependency)
+- Slack links open in the Slack app, through [ProfileRouter](https://github.com/SuperCorks/profile-router) (on by default; toggle in Options)
 
 ## How It Works
 Rules you define are stored and evaluated in the background service worker on `webNavigation.onBeforeNavigate`. If every regex in a rule matches the pending navigation URL, the first matching rule triggers a `tabs.update` redirect.
+
+## Slack links in the Slack app
+`slack://` links need the workspace's team ID, which only the Slack app knows. [ProfileRouter](https://github.com/SuperCorks/profile-router) already reads it, so the extension asks ProfileRouter through Chrome native messaging (host `com.supercorks.profilerouter`) before a `slack.com` link loads:
+- ProfileRouter opens the link in Slack and replies `{ "handled": true }`. A tab opened for the link closes. When the link was clicked in an existing tab, the tab goes back to the page it was on.
+- Links ProfileRouter can't convert (slack.com pages, workspaces the app isn't signed in to) load normally, then the regex rules run as usual.
+- Without ProfileRouter, every link loads normally. The Options page shows whether the host is reachable.
+
+Setup: run `scripts/install.sh` in profile-router. It installs the host and allows this extension's ID (`jhjbhohojgallohcifkfjeojmakiecdl`, the ID Chrome gives the unpacked extension at `~/gcloud-router`). For a different ID, set `PROFILE_ROUTER_EXTENSION_IDS` when running it. Keep the extension unpacked from the same folder: the ID comes from its path, and the saved rules belong to that ID.
 
 ## Install (Development)
 1. `git clone` this repo (or ensure files exist locally).
