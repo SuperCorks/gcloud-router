@@ -11,7 +11,7 @@ function event() {
   return { addListener: fn => listeners.push(fn), fire: (...a) => listeners.forEach(fn => fn(...a)) };
 }
 
-function setup({ enabled = true, tabs = {} } = {}) {
+function setup({ enabled = true, tabs = {}, ready = async () => {}, now } = {}) {
   const calls = { host: [], removed: [], back: [] };
   const replies = [];
   const chrome = {
@@ -32,13 +32,13 @@ function setup({ enabled = true, tabs = {} } = {}) {
     },
     webNavigation: { onCommitted: event(), onErrorOccurred: event() },
   };
-  const slack = createSlackHandoff({ chrome, isEnabled: () => enabled, ready: async () => {} });
+  const slack = createSlackHandoff({ chrome, isEnabled: () => enabled, ready, ...(now ? { now } : {}) });
   slack.register();
   const settle = () => new Promise(r => setTimeout(r, 0));
   return {
     slack, chrome, calls, settle,
     nav: (tabId, url) => slack.onBeforeNavigate({ tabId, url, frameId: 0 }),
-    commit: (tabId, url) => chrome.webNavigation.onCommitted.fire({ tabId, url, frameId: 0 }),
+    commit: (tabId, url, extra = {}) => chrome.webNavigation.onCommitted.fire({ tabId, url, frameId: 0, ...extra }),
     reply: async resp => { await settle(); replies.shift()(resp); await settle(); },
   };
 }
@@ -53,6 +53,8 @@ test('recognizes Slack links, including wrapped ones', () => {
   assert.ok(!isSlackURL('https://notslack.com/x'));
   assert.ok(!isSlackURL('https://www.google.com/url?q=https://github.com'));
   assert.ok(!isSlackURL('slack://channel?team=T1'));
+  // Google's `q` wins; `url` only counts without a `q`, as in ProfileRouter's unwrapper.
+  assert.ok(!isSlackURL('https://www.google.com/url?q=https://github.com&url=' + encodeURIComponent(PERMALINK)));
 });
 
 test('a tab opened for the link closes', async () => {
@@ -192,3 +194,72 @@ test('a stuck handoff expires', async () => {
   assert.equal(await second, true);
   assert.equal(t.calls.host.length, 2);
 });
+
+test('a navigation away while settings load never reaches the host', async () => {
+  let release;
+  const t = setup({ tabs: { 7: { id: 7, url: 'https://linear.app/issue/1' } }, ready: () => new Promise(r => { release = r; }) });
+  const done = t.nav(7, PERMALINK);
+  assert.equal(await t.slack.onBeforeNavigate({ tabId: 7, url: 'https://github.com/', frameId: 0 }), false);
+  release();
+  assert.equal(await done, true); // superseded: no handoff, and no redirect rules on the old URL
+  assert.equal(t.calls.host.length, 0);
+});
+
+test('a reload of a Slack page stays in Chrome, even when it commits before the tab lookup', async () => {
+  let release;
+  const t = setup({ tabs: { 7: { id: 7, url: 'https://app.slack.com/client/T1/C1' } }, ready: () => new Promise(r => { release = r; }) });
+  const done = t.nav(7, 'https://app.slack.com/client/T1/C1');
+  t.commit(7, 'https://app.slack.com/client/T1/C1', { transitionType: 'reload' });
+  release();
+  await done;
+  assert.equal(t.calls.host.length, 0);
+  assert.deepEqual([...t.calls.back, ...t.calls.removed], []);
+});
+
+test('going back to a Slack page stays in Chrome', async () => {
+  const t = setup({ tabs: { 7: { id: 7, url: 'https://linear.app/issue/1' } } });
+  const done = t.nav(7, PERMALINK);
+  t.commit(7, PERMALINK, { transitionType: 'link', transitionQualifiers: ['forward_back'] });
+  assert.equal(await done, true);
+  assert.equal(t.calls.host.length, 0);
+});
+
+test('a different Slack link while one is leaving gets its own decision', async () => {
+  const t = setup({ tabs: { 7: { id: 7, url: 'https://linear.app/issue/1' } } });
+  const first = t.nav(7, PERMALINK);
+  await t.reply(HANDLED);
+  await first; // leaving, waiting for the commit
+  t.chrome.webNavigation.onErrorOccurred.fire({ tabId: 7, frameId: 0, url: PERMALINK, error: 'net::ERR_ABORTED' });
+  const second = t.nav(7, 'https://slack.com/pricing');
+  await t.reply({ handled: false });
+  assert.equal(await second, false);
+  assert.equal(t.calls.host.length, 2);
+  t.commit(7, 'https://slack.com/pricing');
+  assert.deepEqual(t.calls.back, []); // the pricing page stays
+});
+
+test('a redirect hop from the committed Slack page joins the handoff', async () => {
+  const t = setup({ tabs: { 7: { id: 7, url: 'https://linear.app/issue/1' } } });
+  const done = t.nav(7, PERMALINK);
+  await t.settle();
+  t.commit(7, PERMALINK);
+  assert.equal(await t.nav(7, 'https://app.slack.com/client/T1/C024BE91L'), true);
+  await t.reply(HANDLED);
+  await done;
+  assert.equal(t.calls.host.length, 1);
+  t.commit(7, 'https://app.slack.com/client/T1/C024BE91L');
+  assert.deepEqual(t.calls.back, [7]);
+});
+
+test('a reply after the record expired does nothing', async () => {
+  let clock = 0;
+  const t = setup({ tabs: { 7: { id: 7, url: 'https://linear.app/issue/1' } }, now: () => clock });
+  const done = t.nav(7, PERMALINK);
+  await t.settle();
+  t.commit(7, PERMALINK);
+  clock += 60000;
+  await t.reply(HANDLED);
+  assert.equal(await done, true);
+  assert.deepEqual(t.calls.back, []);
+});
+

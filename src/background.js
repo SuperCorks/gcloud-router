@@ -10,22 +10,19 @@ let loadingPromise = null; // track in-flight refresh to prevent duplicate loads
 
 // Reads rules and settings in one call so they're always assigned together.
 async function loadSettings() {
-  return new Promise(resolve => {
-    chrome.storage.sync.get(['rules', 'slackHandoff'], data => {
-      const raw = Array.isArray(data.rules) ? data.rules : [];
-      // Normalize legacy single-pattern rules: pattern -> patterns[pattern]
-      const norm = raw.map(r => {
-        if (!r) return null;
-        if (r.pattern && !r.patterns) {
-          r.patterns = [r.pattern];
-          delete r.pattern;
-        }
-        r.patterns = (r.patterns || []).filter(p => typeof p === 'string' && p.trim());
-        return r;
-      }).filter(Boolean);
-      resolve({ rules: norm, slackHandoff: data.slackHandoff !== false });
-    });
-  });
+  const data = await chrome.storage.sync.get(['rules', 'slackHandoff']); // rejects on storage errors
+  const raw = Array.isArray(data.rules) ? data.rules : [];
+  // Normalize legacy single-pattern rules: pattern -> patterns[pattern]
+  const norm = raw.map(r => {
+    if (!r) return null;
+    if (r.pattern && !r.patterns) {
+      r.patterns = [r.pattern];
+      delete r.pattern;
+    }
+    r.patterns = (r.patterns || []).filter(p => typeof p === 'string' && p.trim());
+    return r;
+  }).filter(Boolean);
+  return { rules: norm, slackHandoff: data.slackHandoff !== false };
 }
 
 function compileRule(rule) {
@@ -82,13 +79,13 @@ async function ensureRulesLoaded() {
   await (loadingPromise || startLoad());
 }
 
-chrome.runtime.onInstalled.addListener(refreshCache);
-chrome.runtime.onStartup?.addListener(refreshCache);
+chrome.runtime.onInstalled.addListener(startLoad);
+chrome.runtime.onStartup?.addListener(startLoad);
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync') return;
   if (changes.slackHandoff) slackHandoff = changes.slackHandoff.newValue !== false;
-  if (changes.rules || changes.slackHandoff) refreshCache();
+  if (changes.rules || changes.slackHandoff) startLoad();
 });
 
 // Listen for committed navigation then decide redirect early if possible

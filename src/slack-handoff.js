@@ -10,16 +10,21 @@
 //   asking  - waiting for the host's reply
 //   leaving - handed off; go back once the Slack page commits (going back earlier would skip past
 //             the page the link was on)
-// The record is dropped once the tab is left, a different page starts loading, or it expires.
+// The record is dropped once the tab is left, a different page starts loading, the Slack page
+// commits as a reload or a back/forward visit (Slack kept in Chrome on purpose), or it expires.
+// The native host only ever opens Slack, and only for workspaces the Slack app is signed in to.
 
 export const NATIVE_HOST = 'com.supercorks.profilerouter';
 const RECORD_TTL_MS = 15000;
+// A Slack page that already committed may redirect itself (for example to app.slack.com) right
+// away. Such a hop joins the handoff instead of asking the host again.
+const HOP_MS = 2000;
 
 // Redirect wrappers whose target is in a query parameter, as ProfileRouter's URLUnwrapper knows them.
 function wrappedTarget(u) {
   const host = u.hostname.toLowerCase();
   if ((host === 'google.com' || host.endsWith('.google.com')) && u.pathname === '/url') {
-    return u.searchParams.get('q') || u.searchParams.get('url');
+    return u.searchParams.get('q') || (u.searchParams.has('q') ? null : u.searchParams.get('url'));
   }
   if (host.endsWith('safelinks.protection.outlook.com') || host === 'slack-redir.net') {
     return u.searchParams.get('url');
@@ -57,7 +62,7 @@ function isActiveMainFrame(details) {
  * @param {() => number} [deps.now]
  */
 export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now }) {
-  const records = new Map(); // tabId -> { phase, fresh, committed, expires }
+  const records = new Map(); // tabId -> { phase, url, fresh, committed, started, expires }
   const newTabs = new Set(); // tabs that haven't committed a real page yet
 
   function current(tabId) {
@@ -72,6 +77,7 @@ export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now })
   function askHost(url, incognito) {
     return new Promise(resolve => {
       chrome.runtime.sendNativeMessage(NATIVE_HOST, { url, incognito }, resp => {
+        // Read lastError even when unused, or Chrome logs it as unchecked.
         if (chrome.runtime.lastError) {
           console.warn('[GCloudRouter] ProfileRouter host unavailable:', chrome.runtime.lastError.message);
           resolve(null);
@@ -107,34 +113,44 @@ export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now })
       return false;
     }
     if (rec) {
-      // Another Slack navigation while one is being handed off: a redirect hop or a second click.
-      // The first reply decides for both; leave once this one commits.
-      rec.committed = false;
-      rec.expires = now() + RECORD_TTL_MS;
-      return true;
+      // The same link again (a double click), or the committed Slack page redirecting itself:
+      // part of this handoff, so leave once this navigation commits. Any other Slack link gets its
+      // own decision.
+      const hop = rec.committed && now() - rec.started < HOP_MS;
+      if (url === rec.url || hop) {
+        rec.url = url;
+        rec.committed = false;
+        rec.expires = now() + RECORD_TTL_MS;
+        return true;
+      }
+      records.delete(tabId);
     }
 
-    const mine = { phase: 'asking', fresh: newTabs.has(tabId), committed: false, expires: now() + RECORD_TTL_MS };
+    const mine = { phase: 'asking', url, fresh: newTabs.has(tabId), committed: false, started: now(), expires: now() + RECORD_TTL_MS };
     records.set(tabId, mine);
     const [, tab] = await Promise.all([ready(), chrome.tabs.get(tabId).catch(() => null)]);
-    const stillMine = () => records.get(tabId) === mine;
+    // Expired, or replaced by another navigation: whatever happens next isn't this handoff's call.
+    const stillMine = () => current(tabId) === mine;
+    if (!stillMine()) return true;
 
-    // Slack's own web client (a reload, or navigating within it) stays in Chrome.
+    // Slack's own web client (navigating within it) stays in Chrome.
     const onSlackAlready = !mine.fresh && !mine.committed && isSlackURL(tab?.url);
     if (!isEnabled() || !tab || onSlackAlready) {
-      if (stillMine()) records.delete(tabId);
+      records.delete(tabId);
       return false;
     }
 
     const resp = await askHost(url, !!tab.incognito);
-    if (!stillMine()) return true; // the tab moved on while the host was answering
+    if (!stillMine()) return true;
+    // Private windows: never put their URLs in the extension's console either.
+    const shown = tab.incognito ? '(private window)' : url;
     if (!resp?.handled) {
       records.delete(tabId);
-      if (resp?.error) console.warn('[GCloudRouter] ProfileRouter could not open', url, resp.error);
+      if (resp?.error) console.warn('[GCloudRouter] ProfileRouter could not open', shown, resp.error);
       return false;
     }
 
-    console.log('[GCloudRouter] Opened in', resp.app, { url, appURL: resp.appURL });
+    console.log('[GCloudRouter] Opened in', resp.app, tab.incognito ? shown : { url, appURL: resp.appURL });
     if (mine.fresh || isBlankURL(tab.url)) {
       records.delete(tabId);
       await closeTab(tabId);
@@ -152,6 +168,10 @@ export function createSlackHandoff({ chrome, isEnabled, ready, now = Date.now })
     if (!isBlankURL(details.url)) newTabs.delete(tabId);
     const rec = current(tabId);
     if (!rec) return;
+    if (details.transitionType === 'reload' || details.transitionQualifiers?.includes('forward_back')) {
+      records.delete(tabId); // a Slack page you came back to or reloaded stays
+      return;
+    }
     rec.committed = true;
     if (rec.phase === 'leaving') leave(tabId);
   }

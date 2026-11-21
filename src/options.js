@@ -1,5 +1,7 @@
 // options.js - manage multi-regex (AND) redirect rules
 
+import { NATIVE_HOST } from './slack-handoff.js';
+
 const tbody = document.getElementById('rulesBody');
 const statusEl = document.getElementById('status');
 
@@ -199,7 +201,7 @@ function setHostStatus(msg, ok) {
 // A non-web URL gets { handled: false } without opening anything, so it's a safe connection check.
 function checkProfileRouterHost() {
   if (!slackBox.checked) return setHostStatus('', true);
-  chrome.runtime.sendNativeMessage('com.supercorks.profilerouter', { url: 'about:blank' }, () => {
+  chrome.runtime.sendNativeMessage(NATIVE_HOST, { url: 'about:blank' }, () => {
     const error = chrome.runtime.lastError; // read it even when the answer is no longer wanted
     if (!slackBox.checked) return; // turned off while the check was running
     if (error) {
