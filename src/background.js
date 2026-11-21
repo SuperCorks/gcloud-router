@@ -1,26 +1,28 @@
 // background.js - service worker implementing multi-pattern AND redirects
 // Each rule: { enabled: bool, patterns: string[] (all must match), destination: string }
 
+import { createSlackHandoff } from './slack-handoff.js';
+
 let cachedRules = [];
+let slackHandoff = true; // `slackHandoff` setting: open Slack links in the Slack app (on by default)
+let loaded = false; // rules and settings have been read at least once
 let loadingPromise = null; // track in-flight refresh to prevent duplicate loads
 
-async function loadRules() {
-  return new Promise(resolve => {
-    chrome.storage.sync.get(['rules'], data => {
-      const raw = Array.isArray(data.rules) ? data.rules : [];
-      // Normalize legacy single-pattern rules: pattern -> patterns[pattern]
-      const norm = raw.map(r => {
-        if (!r) return null;
-        if (r.pattern && !r.patterns) {
-          r.patterns = [r.pattern];
-          delete r.pattern;
-        }
-        r.patterns = (r.patterns || []).filter(p => typeof p === 'string' && p.trim());
-        return r;
-      }).filter(Boolean);
-      resolve(norm);
-    });
-  });
+// Reads rules and settings in one call so they're always assigned together.
+async function loadSettings() {
+  const data = await chrome.storage.sync.get(['rules', 'slackHandoff']); // rejects on storage errors
+  const raw = Array.isArray(data.rules) ? data.rules : [];
+  // Normalize legacy single-pattern rules: pattern -> patterns[pattern]
+  const norm = raw.map(r => {
+    if (!r) return null;
+    if (r.pattern && !r.patterns) {
+      r.patterns = [r.pattern];
+      delete r.pattern;
+    }
+    r.patterns = (r.patterns || []).filter(p => typeof p === 'string' && p.trim());
+    return r;
+  }).filter(Boolean);
+  return { rules: norm, slackHandoff: data.slackHandoff !== false };
 }
 
 function compileRule(rule) {
@@ -51,32 +53,47 @@ function compileRule(rule) {
 }
 
 async function refreshCache() {
-  const rules = await loadRules();
-  cachedRules = rules.map(compileRule).filter(Boolean);
-  console.log('Router: cached rules', cachedRules.length);
+  const settings = await loadSettings();
+  cachedRules = settings.rules.map(compileRule).filter(Boolean);
+  slackHandoff = settings.slackHandoff;
+  loaded = true;
+  console.log('Router: cached rules', cachedRules.length, 'slack handoff', slackHandoff);
+}
+
+// Off until settings have loaded once, so a failed read never overrides a saved "off".
+const slack = createSlackHandoff({ chrome, isEnabled: () => loaded && slackHandoff, ready: ensureRulesLoaded });
+slack.register();
+
+function startLoad() {
+  const load = refreshCache()
+    .catch(e => console.warn('Rule load failed', e))
+    .finally(() => { if (loadingPromise === load) loadingPromise = null; });
+  loadingPromise = load;
+  return load;
 }
 
 // Eagerly load rules every time the service worker spins up (cold start or after suspension)
-loadingPromise = refreshCache().catch(e => console.warn('Initial rule load failed', e));
+startLoad();
 
 async function ensureRulesLoaded() {
-  // If cache empty (e.g., very first event before async load completes or unexpected failure), wait for current or start new load
-  if (cachedRules.length === 0) {
-    if (!loadingPromise) loadingPromise = refreshCache().finally(() => { loadingPromise = null; });
-    try { await loadingPromise; } catch { /* already logged */ }
-  }
+  // Wait for the first load (or retry one that failed) before evaluating anything
+  if (loaded) return;
+  await (loadingPromise || startLoad());
 }
 
-chrome.runtime.onInstalled.addListener(refreshCache);
-chrome.runtime.onStartup?.addListener(refreshCache);
+chrome.runtime.onInstalled.addListener(startLoad);
+chrome.runtime.onStartup?.addListener(startLoad);
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'sync' && changes.rules) refreshCache();
+  if (area !== 'sync') return;
+  if (changes.slackHandoff) slackHandoff = changes.slackHandoff.newValue !== false;
+  if (changes.rules || changes.slackHandoff) startLoad();
 });
 
 // Listen for committed navigation then decide redirect early if possible
 chrome.webNavigation.onBeforeNavigate.addListener(async details => {
   if (details.frameId !== 0) return; // only main frame
+  if (await slack.onBeforeNavigate(details)) return; // first, before any other await
   await ensureRulesLoaded();
   const url = details.url;
   for (const rule of cachedRules) {

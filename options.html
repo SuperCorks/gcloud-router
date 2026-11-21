@@ -26,10 +26,19 @@
     #addRow { margin-top: .75rem; }
     #status { margin-top: .75rem; font-size: .8rem; }
     .regex { font-family: "SFMono-Regular", Consolas, monospace; }
+    .setting { margin: 1rem 0; font-size: .9rem; }
+    .setting label { display: flex; align-items: center; gap: .4rem; }
+    #slackHostStatus { margin-top: .25rem; font-size: .8rem; color: #555; }
+    #slackHostStatus.error { color: crimson; }
   </style>
 </head>
 <body>
-  <h1>GCloud Router Rules</h1>
+  <h1>GCloud Router</h1>
+  <div class="setting">
+    <label><input type="checkbox" id="slackHandoff"> Open Slack links in the Slack app</label>
+    <div id="slackHostStatus"></div>
+  </div>
+  <h2>Redirect rules</h2>
   <p>Provide regex patterns to match navigation URLs (all must pass). Prefix a pattern with <code>!</code> to negate it. Destination may reference capture groups from the last positive pattern.</p>
   <table id="rulesTable">
     <thead>

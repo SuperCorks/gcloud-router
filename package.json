@@ -1,0 +1,8 @@
+{
+  "name": "gcloud-router",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-timeout=5000"
+  }
+}
